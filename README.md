@@ -22,6 +22,23 @@ python3 scripts/storage_manager.py status
 3. Give feedback on what was useful.
 4. Ask for a deep dive on any paper ID to load and discuss the full paper.
 
+## Unread-day flow
+
+Track what you've already read:
+```bash
+python3 scripts/storage_manager.py mark-read --date 2026-02-10
+```
+
+Get "last unread days" window:
+```bash
+python3 scripts/storage_manager.py unread-range
+```
+
+Use returned period with fetch:
+```bash
+python3 scripts/arxiv_fetch.py --period YYYY-MM-DD:YYYY-MM-DD --output /tmp/papers.json -q
+```
+
 ## Where your data lives
 
 `~/.claude/arxiv-digest/`

@@ -106,6 +106,20 @@ Latency guardrail for `today` digests:
 - do one fetch pass, one ranking pass, and one digest-format pass.
 - if key input files are missing, fail fast with one clear message instead of retrying equivalent commands.
 
+Unread-day tracking workflow:
+- mark read days after delivering a digest:
+```bash
+python3 scripts/storage_manager.py mark-read --date 2026-02-10
+```
+- for "digest of last unread days", compute the unread window first:
+```bash
+python3 scripts/storage_manager.py unread-range
+```
+- then fetch that period:
+```bash
+python3 scripts/arxiv_fetch.py --period YYYY-MM-DD:YYYY-MM-DD --output /tmp/papers.json -q
+```
+
 Collection targets by period:
 - `today` or single day: 30-80 papers
 - `week` (7 days): 80-180 papers

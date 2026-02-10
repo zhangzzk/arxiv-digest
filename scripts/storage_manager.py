@@ -20,11 +20,14 @@ import argparse
 import json
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 from storage_paths import StoragePaths, get_storage_paths, update_user_record
+
+
+DATE_FMT = "%Y-%m-%d"
 
 
 def init_storage(paths: StoragePaths, verbose: bool = True) -> bool:
@@ -32,6 +35,9 @@ def init_storage(paths: StoragePaths, verbose: bool = True) -> bool:
     try:
         paths.root.mkdir(parents=True, exist_ok=True)
         paths.history.mkdir(exist_ok=True)
+        if not paths.read_state.exists():
+            with open(paths.read_state, "w") as f:
+                json.dump(_read_state_default(), f, indent=2, ensure_ascii=False)
         update_user_record(paths)
 
         if verbose:
@@ -40,11 +46,155 @@ def init_storage(paths: StoragePaths, verbose: bool = True) -> bool:
             print(f"  Preferences: {paths.prefs}")
             print(f"  Record: {paths.record}")
             print(f"  History: {paths.history}")
+            print(f"  Read state: {paths.read_state}")
 
         return True
     except Exception as e:
         print(f"✗ Failed to initialize storage: {e}", file=sys.stderr)
         return False
+
+
+def _normalize_date(date_text: str) -> str:
+    dt = datetime.strptime(date_text, DATE_FMT)
+    return dt.strftime(DATE_FMT)
+
+
+def _date_range(start_date: str, end_date: str) -> List[str]:
+    start_dt = datetime.strptime(_normalize_date(start_date), DATE_FMT).date()
+    end_dt = datetime.strptime(_normalize_date(end_date), DATE_FMT).date()
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+    dates: List[str] = []
+    cursor = start_dt
+    while cursor <= end_dt:
+        dates.append(cursor.strftime(DATE_FMT))
+        cursor += timedelta(days=1)
+    return dates
+
+
+def _read_state_default() -> Dict:
+    return {
+        "version": 1,
+        "last_read_date": "",
+        "read_dates": [],
+        "updated_at": datetime.now().strftime(DATE_FMT),
+    }
+
+
+def _load_read_state(paths: StoragePaths) -> Dict:
+    if not paths.read_state.exists():
+        return _read_state_default()
+    try:
+        with open(paths.read_state) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return _read_state_default()
+        read_dates = data.get("read_dates", [])
+        if not isinstance(read_dates, list):
+            read_dates = []
+        cleaned = sorted({
+            _normalize_date(d) for d in read_dates if isinstance(d, str)
+        })
+        state = {
+            "version": 1,
+            "last_read_date": data.get("last_read_date", ""),
+            "read_dates": cleaned,
+            "updated_at": data.get("updated_at", datetime.now().strftime(DATE_FMT)),
+        }
+        if state["last_read_date"]:
+            state["last_read_date"] = _normalize_date(state["last_read_date"])
+        elif cleaned:
+            state["last_read_date"] = cleaned[-1]
+        return state
+    except Exception:
+        return _read_state_default()
+
+
+def _save_read_state(paths: StoragePaths, state: Dict) -> None:
+    paths.root.mkdir(parents=True, exist_ok=True)
+    state["updated_at"] = datetime.now().strftime(DATE_FMT)
+    with open(paths.read_state, "w") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+    update_user_record(paths)
+
+
+def mark_read_days(paths: StoragePaths, dates: List[str], verbose: bool = True) -> bool:
+    try:
+        state = _load_read_state(paths)
+        merged: Set[str] = set(state.get("read_dates", []))
+        merged.update(_normalize_date(d) for d in dates)
+        read_dates = sorted(merged)
+        state["read_dates"] = read_dates
+        state["last_read_date"] = read_dates[-1] if read_dates else ""
+        _save_read_state(paths, state)
+        if verbose:
+            print(f"✓ Marked {len(dates)} day(s) as read")
+            print(f"  Last read date: {state['last_read_date'] or 'N/A'}")
+            print(f"  Read state: {paths.read_state}")
+        return True
+    except Exception as e:
+        print(f"✗ Failed to mark read days: {e}", file=sys.stderr)
+        return False
+
+
+def mark_unread_days(paths: StoragePaths, dates: List[str], verbose: bool = True) -> bool:
+    try:
+        state = _load_read_state(paths)
+        remove_set = {_normalize_date(d) for d in dates}
+        read_dates = [d for d in state.get("read_dates", []) if d not in remove_set]
+        state["read_dates"] = read_dates
+        state["last_read_date"] = read_dates[-1] if read_dates else ""
+        _save_read_state(paths, state)
+        if verbose:
+            print(f"✓ Marked {len(dates)} day(s) as unread")
+            print(f"  Last read date: {state['last_read_date'] or 'N/A'}")
+            print(f"  Read state: {paths.read_state}")
+        return True
+    except Exception as e:
+        print(f"✗ Failed to mark unread days: {e}", file=sys.stderr)
+        return False
+
+
+def get_unread_range(
+    paths: StoragePaths,
+    until: Optional[str] = None,
+    default_days: int = 7,
+    max_days: int = 30,
+) -> Tuple[str, str, int]:
+    until_day = _normalize_date(until) if until else datetime.now().strftime(DATE_FMT)
+    state = _load_read_state(paths)
+    last_read = state.get("last_read_date", "")
+
+    if last_read:
+        start_dt = datetime.strptime(last_read, DATE_FMT).date() + timedelta(days=1)
+    else:
+        window = max(1, min(default_days, max_days))
+        start_dt = datetime.strptime(until_day, DATE_FMT).date() - timedelta(days=window - 1)
+
+    until_dt = datetime.strptime(until_day, DATE_FMT).date()
+    if start_dt > until_dt:
+        return "", "", 0
+
+    span_days = (until_dt - start_dt).days + 1
+    if span_days > max_days:
+        start_dt = until_dt - timedelta(days=max_days - 1)
+        span_days = max_days
+
+    return start_dt.strftime(DATE_FMT), until_day, span_days
+
+
+def _expand_days_args(date_arg: Optional[str], range_arg: Optional[str]) -> List[str]:
+    dates: List[str] = []
+    if date_arg:
+        dates.append(_normalize_date(date_arg))
+    if range_arg:
+        parts = range_arg.split(":")
+        if len(parts) != 2:
+            raise ValueError("range must be START:END in YYYY-MM-DD format")
+        dates.extend(_date_range(parts[0].strip(), parts[1].strip()))
+    if not dates:
+        dates.append(datetime.now().strftime(DATE_FMT))
+    return sorted(set(dates))
 
 
 def check_status(paths: StoragePaths, verbose: bool = True) -> dict:
@@ -58,6 +208,7 @@ def check_status(paths: StoragePaths, verbose: bool = True) -> dict:
         "prefs_exists": paths.prefs.exists(),
         "record_exists": paths.record.exists(),
         "history_exists": paths.history.exists(),
+        "read_state_exists": paths.read_state.exists(),
     }
 
     if verbose:
@@ -67,6 +218,7 @@ def check_status(paths: StoragePaths, verbose: bool = True) -> dict:
         print(f"  Preferences: {'✓' if status['prefs_exists'] else '✗'} {paths.prefs}")
         print(f"  User record: {'✓' if status['record_exists'] else '✗'} {paths.record}")
         print(f"  History: {'✓' if status['history_exists'] else '✗'} {paths.history}")
+        print(f"  Read state: {'✓' if status['read_state_exists'] else '✗'} {paths.read_state}")
 
         if status['profile_exists']:
             try:
@@ -98,6 +250,11 @@ def check_status(paths: StoragePaths, verbose: bool = True) -> dict:
             history_files = list(paths.history.glob("*.json"))
             print(f"    → History entries: {len(history_files)}")
 
+        if status['read_state_exists']:
+            state = _load_read_state(paths)
+            print(f"    → Last read date: {state.get('last_read_date') or 'N/A'}")
+            print(f"    → Read dates tracked: {len(state.get('read_dates', []))}")
+
     return status
 
 
@@ -109,6 +266,7 @@ def show_paths(paths: StoragePaths):
     print(f"  Preferences: {paths.prefs}")
     print(f"  Record: {paths.record}")
     print(f"  History: {paths.history}")
+    print(f"  Read state: {paths.read_state}")
 
 
 def backup_storage(paths: StoragePaths, dest: Optional[str] = None) -> bool:
@@ -245,6 +403,8 @@ Examples:
   python3 storage_manager.py backup
   python3 storage_manager.py backup ~/my-backup.tar.gz
   python3 storage_manager.py restore ~/my-backup.tar.gz
+  python3 storage_manager.py mark-read --date 2026-02-10
+  python3 storage_manager.py unread-range
   python3 storage_manager.py reset
         """,
     )
@@ -281,6 +441,35 @@ Examples:
     create_parser.add_argument("--categories", "-c", nargs="+", help="Arxiv categories")
     create_parser.add_argument("--interests", "-i", nargs="+", help="Research interests")
 
+    # Mark-read command
+    mark_read_parser = subparsers.add_parser("mark-read", help="Mark one date or date range as read")
+    mark_read_parser.add_argument("--date", help="Single date in YYYY-MM-DD (default: today)")
+    mark_read_parser.add_argument("--range", dest="date_range", help="Date range START:END (YYYY-MM-DD:YYYY-MM-DD)")
+
+    # Mark-unread command
+    mark_unread_parser = subparsers.add_parser("mark-unread", help="Mark one date or date range as unread")
+    mark_unread_parser.add_argument("--date", help="Single date in YYYY-MM-DD (default: today)")
+    mark_unread_parser.add_argument("--range", dest="date_range", help="Date range START:END (YYYY-MM-DD:YYYY-MM-DD)")
+
+    # Unread-range command
+    unread_parser = subparsers.add_parser(
+        "unread-range",
+        help="Get period covering the last unread days (from day after last_read_date to --until)",
+    )
+    unread_parser.add_argument("--until", help="End date in YYYY-MM-DD (default: today)")
+    unread_parser.add_argument(
+        "--default-days",
+        type=int,
+        default=7,
+        help="Fallback window when no read history exists (default: 7)",
+    )
+    unread_parser.add_argument(
+        "--max-days",
+        type=int,
+        default=30,
+        help="Cap unread span in days (default: 30)",
+    )
+
     args = parser.parse_args()
     paths = get_storage_paths(args.storage_dir)
 
@@ -305,6 +494,40 @@ Examples:
         success = reset_storage(paths, confirm=args.yes)
     elif args.command == "create-prefs":
         success = create_default_preferences(paths, args.categories, args.interests)
+    elif args.command == "mark-read":
+        try:
+            dates = _expand_days_args(args.date, args.date_range)
+        except Exception as e:
+            print(f"✗ Invalid date input: {e}", file=sys.stderr)
+            return 1
+        success = mark_read_days(paths, dates)
+    elif args.command == "mark-unread":
+        try:
+            dates = _expand_days_args(args.date, args.date_range)
+        except Exception as e:
+            print(f"✗ Invalid date input: {e}", file=sys.stderr)
+            return 1
+        success = mark_unread_days(paths, dates)
+    elif args.command == "unread-range":
+        try:
+            start, end, days = get_unread_range(
+                paths,
+                until=args.until,
+                default_days=max(1, args.default_days),
+                max_days=max(1, args.max_days),
+            )
+            print("Unread Digest Window:")
+            if days == 0:
+                print("  No unread days in range (already up to date).")
+            else:
+                print(f"  Start: {start}")
+                print(f"  End:   {end}")
+                print(f"  Days:  {days}")
+                print(f"  Period arg: {start}:{end}")
+            success = True
+        except Exception as e:
+            print(f"✗ Failed to compute unread range: {e}", file=sys.stderr)
+            success = False
     else:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         success = False

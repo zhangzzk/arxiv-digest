@@ -24,6 +24,7 @@ class StoragePaths:
     prefs: Path
     record: Path
     history: Path
+    read_state: Path
 
 
 def get_storage_paths(storage_dir: Optional[str] = None) -> StoragePaths:
@@ -34,6 +35,7 @@ def get_storage_paths(storage_dir: Optional[str] = None) -> StoragePaths:
         prefs=root / "arxiv_preferences.json",
         record=root / "user_record.json",
         history=root / "history",
+        read_state=root / "read_state.json",
     )
 
 
@@ -64,6 +66,7 @@ def update_user_record(
         "files": {
             "researcher_profile": _build_profile_entry(profile),
             "arxiv_preferences": _build_prefs_entry(prefs),
+            "read_state": _build_read_state_entry(paths.read_state),
         },
     }
 
@@ -117,6 +120,22 @@ def _build_prefs_entry(path: Path) -> Dict[str, Any]:
             "favorite_authors_count": len(data.get("favorite_authors", [])),
             "arxiv_categories": data.get("arxiv_categories", []),
             "last_updated": data.get("last_updated", ""),
+        }
+    return info
+
+
+def _build_read_state_entry(path: Path) -> Dict[str, Any]:
+    info: Dict[str, Any] = _file_info(path)
+    if not path.exists():
+        return info
+
+    data = _read_json(path)
+    if data:
+        read_dates = data.get("read_dates", [])
+        info["summary"] = {
+            "last_read_date": data.get("last_read_date", ""),
+            "read_dates_count": len(read_dates) if isinstance(read_dates, list) else 0,
+            "updated_at": data.get("updated_at", ""),
         }
     return info
 
