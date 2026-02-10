@@ -8,6 +8,12 @@ It does three things well:
 - gets better over time from your feedback
 - keeps canonical new submissions only (excludes cross-listed and replacement entries)
 
+Standard digest entry format:
+- `#01 Full Paper Title (2501.12345) -- Author A, Author B, Author C`
+- `2-4 sentence summary`
+- `Why it matches: ...`
+- `Link: arXiv`
+
 ## Quick start
 
 ```bash

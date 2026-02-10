@@ -198,9 +198,10 @@ Preflight omission check (required):
 Per paper include:
 - unique reference index (global within digest): `#01`, `#02`, ...
 - title + arxiv ID
-- authors (mark recognized co-authors)
+- 1-3 authors (mark recognized co-authors)
 - concise 2-4 sentence summary
 - why-it-matches tag
+- fixed link line: `Link: arXiv`
 - for boundary papers: `Extends toward: ...`
 
 Title rendering rule (required):
@@ -218,10 +219,23 @@ Summary construction rule (required):
 - avoid vague fillers like "interesting work" or "relevant paper" without concrete abstract-grounded details.
 
 Output style:
-- numbered list
-- prepend each entry with its unique index (e.g., `#07`)
+- use the exact entry template below for every paper
 - most relevant first within each section
 - concise summaries unless user requests detail
+
+Standard entry template (required):
+```text
+#01 Full Paper Title (2501.12345) -- Author A, Author B, Author C
+2-4 sentence summary grounded in abstract metadata.
+Why it matches: specific overlap with user interests/signals.
+Link: arXiv
+```
+
+Formatting rules (required):
+- first line must be exactly: `#{index} {full title} ({arxiv_id}) -- {1-3 authors}`.
+- always include `Why it matches:` as a separate line.
+- always include `Link: arXiv` as the final line.
+- do not output extra bullets/sub-lines inside one paper entry.
 
 Digest provenance block (required):
 - report fetch period, fetch timestamp, categories, total fetched papers, total excluded cross-lists, total excluded replacements, and whether any source queries failed.
