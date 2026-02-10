@@ -6,13 +6,6 @@ It does three things well:
 - finds new papers for your time window (`today`, `week`, `month`, custom ranges)
 - ranks them using your interests and collaborator network
 - gets better over time from your feedback
-- keeps canonical new submissions only (excludes cross-listed and replacement entries)
-
-Standard digest entry format:
-- `#01 Full Paper Title (2501.12345) -- Author A, Author B, Author C`
-- `2-4 sentence summary`
-- `Why it matches: ...`
-- `Link: arXiv`
 
 ## Quick start
 
@@ -27,35 +20,18 @@ python3 scripts/storage_manager.py status
 1. Ask for a digest (for example: "what's new this week?").
 2. Review ranked papers with stable IDs like `#01`, `#02`.
 3. Give feedback on what was useful.
-4. Ask for a deep dive on any paper ID; `arxiv-digest` will route to relevant companion skills:
-   - `pdf` for full-paper reading and evidence checks
-   - `jupyter-notebook` for experiments/reproduction
-   - `doc` for polished `.docx` notes/writeups
-   - `notion-knowledge-capture` for structured Notion capture
+4. Ask for a deep dive on any paper ID; `arxiv-digest` will route to relevant companion skills.
 
-## Unread-day flow
+## Where your profile lives
 
-Track what you've already read:
-```bash
-python3 scripts/storage_manager.py mark-read --date 2026-02-10
-```
-
-Get "last unread days" window:
-```bash
-python3 scripts/storage_manager.py unread-range
-```
-
-Use returned period as the `web_search` time window for digest collection.
-
-## Where your data lives
-
-`~/.claude/arxiv-digest/`
+`~/.local/share/arxiv-digest/`
 - `researcher_profile.json`
 - `arxiv_preferences.json`
 - `user_record.json`
 - `history/`
 
 You can override storage with `--storage-dir`, `ARXIV_DIGEST_HOME`, or `XDG_DATA_HOME`.
+If storage is pointed under a skills install directory, scripts auto-redirect to `~/.local/share/arxiv-digest` to protect data from skill uninstall cleanup.
 
 ## Files
 

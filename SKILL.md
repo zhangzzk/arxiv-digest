@@ -32,7 +32,11 @@ Use this storage root resolution order:
 1. `--storage-dir /path/to/arxiv-digest`
 2. `ARXIV_DIGEST_HOME`
 3. `XDG_DATA_HOME/arxiv-digest`
-4. `~/.claude/arxiv-digest` (fallback)
+4. `~/.local/share/arxiv-digest` (fallback)
+
+Durability rule (required):
+- never store profile/preferences under a skill install directory (for example `~/.codex/skills/...` or `~/.claude/skills/...`), because removing the skill can delete that directory.
+- if a configured storage root resolves under a skills directory, scripts will auto-redirect to `~/.local/share/arxiv-digest`.
 
 Expected files:
 - `researcher_profile.json`
@@ -57,8 +61,8 @@ python3 scripts/build_profile.py \
 Refresh existing profile when user asks, monthly, or after new publications:
 ```bash
 python3 scripts/build_profile.py \
-  --update ~/.claude/arxiv-digest/researcher_profile.json \
-  --output ~/.claude/arxiv-digest/researcher_profile.json
+  --update ~/.local/share/arxiv-digest/researcher_profile.json \
+  --output ~/.local/share/arxiv-digest/researcher_profile.json
 ```
 
 ### If preferences are missing
@@ -301,12 +305,12 @@ Update policy:
 Refresh command:
 ```bash
 python3 scripts/build_profile.py \
-  --update ~/.claude/arxiv-digest/researcher_profile.json \
-  --output ~/.claude/arxiv-digest/researcher_profile.json
+  --update ~/.local/share/arxiv-digest/researcher_profile.json \
+  --output ~/.local/share/arxiv-digest/researcher_profile.json
 ```
 
 Save updated profile:
-- `~/.claude/arxiv-digest/researcher_profile.json` (or resolved storage root)
+- `~/.local/share/arxiv-digest/researcher_profile.json` (or resolved storage root)
 
 ## Step 8: Update Preferences
 
@@ -317,7 +321,7 @@ Apply feedback:
 - liked expanders -> promote topic toward `core_interests` when appropriate
 
 Save updated preferences:
-- `~/.claude/arxiv-digest/arxiv_preferences.json` (or resolved storage root)
+- `~/.local/share/arxiv-digest/arxiv_preferences.json` (or resolved storage root)
 
 ## Edge Cases
 

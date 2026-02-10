@@ -410,7 +410,7 @@ Examples:
     )
     parser.add_argument(
         "--storage-dir",
-        help="Storage root override (default: ARXIV_DIGEST_HOME, XDG_DATA_HOME/arxiv-digest, or ~/.claude/arxiv-digest)",
+        help="Storage root override (default: ARXIV_DIGEST_HOME, XDG_DATA_HOME/arxiv-digest, or ~/.local/share/arxiv-digest)",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")

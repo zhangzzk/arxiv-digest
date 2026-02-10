@@ -529,7 +529,7 @@ def main():
     )
     parser.add_argument(
         "--storage-dir",
-        help="Storage root override (default: ARXIV_DIGEST_HOME, XDG_DATA_HOME/arxiv-digest, or ~/.claude/arxiv-digest)",
+        help="Storage root override (default: ARXIV_DIGEST_HOME, XDG_DATA_HOME/arxiv-digest, or ~/.local/share/arxiv-digest)",
     )
     parser.add_argument("--output", "-o",
                         help="Output file path (default: storage/researcher_profile.json, or --update path in update mode)")

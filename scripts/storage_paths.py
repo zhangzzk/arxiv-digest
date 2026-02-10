@@ -6,7 +6,13 @@ Supports portable storage resolution:
 1) --storage-dir argument (passed in by caller)
 2) ARXIV_DIGEST_HOME environment variable
 3) XDG_DATA_HOME/arxiv-digest
-4) ~/.claude/arxiv-digest (default fallback)
+4) ~/.local/share/arxiv-digest (default fallback)
+
+Safety guard:
+- If a configured storage root resolves under a skill-install directory
+  (for example ~/.codex/skills/... or ~/.claude/skills/...), automatically
+  redirect to the durable default fallback so uninstalling a skill does not
+  remove user data.
 """
 
 import json
@@ -77,18 +83,40 @@ def update_user_record(
 
 
 def _resolve_storage_root(storage_dir: Optional[str] = None) -> Path:
+    durable_default = _durable_default_root()
+
     if storage_dir:
-        return Path(storage_dir).expanduser().resolve()
+        candidate = Path(storage_dir).expanduser().resolve()
+        return durable_default if _is_skill_install_path(candidate) else candidate
 
     env_root = os.environ.get("ARXIV_DIGEST_HOME")
     if env_root:
-        return Path(env_root).expanduser().resolve()
+        candidate = Path(env_root).expanduser().resolve()
+        return durable_default if _is_skill_install_path(candidate) else candidate
 
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
     if xdg_data_home:
-        return (Path(xdg_data_home).expanduser() / "arxiv-digest").resolve()
+        candidate = (Path(xdg_data_home).expanduser() / "arxiv-digest").resolve()
+        return durable_default if _is_skill_install_path(candidate) else candidate
 
-    return (Path.home() / ".claude" / "arxiv-digest").resolve()
+    return durable_default
+
+
+def _durable_default_root() -> Path:
+    return (Path.home() / ".local" / "share" / "arxiv-digest").resolve()
+
+
+def _is_skill_install_path(path: Path) -> bool:
+    """
+    Heuristic guard against storing persistent user data under skill install dirs.
+    """
+    p = str(path).replace("\\", "/")
+    blocked_markers = (
+        "/.codex/skills/",
+        "/.claude/skills/",
+        "/Library/Application Support/Claude/skills/",
+    )
+    return any(marker in p for marker in blocked_markers)
 
 
 def _build_profile_entry(path: Path) -> Dict[str, Any]:
