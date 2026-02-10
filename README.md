@@ -20,7 +20,11 @@ python3 scripts/storage_manager.py status
 1. Ask for a digest (for example: "what's new this week?").
 2. Review ranked papers with stable IDs like `#01`, `#02`.
 3. Give feedback on what was useful.
-4. Ask for a deep dive on any paper ID to load and discuss the full paper.
+4. Ask for a deep dive on any paper ID; `arxiv-digest` will route to relevant companion skills:
+   - `pdf` for full-paper reading and evidence checks
+   - `jupyter-notebook` for experiments/reproduction
+   - `doc` for polished `.docx` notes/writeups
+   - `notion-knowledge-capture` for structured Notion capture
 
 ## Unread-day flow
 

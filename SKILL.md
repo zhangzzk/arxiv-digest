@@ -22,6 +22,7 @@ Fetch, rank, and present arxiv papers using two persistent user files:
 3. Rank papers with preference + network signals.
 4. Present period-scaled digest in 3 tiers.
 5. Collect feedback and profile updates from interaction.
+6. When user asks to dive into a specific paper, hand off to relevant companion skills.
 
 ## Step 1: Profile and Preferences
 
@@ -236,6 +237,18 @@ If the user asks to dive into a paper (by digest index like `#03` or by arxiv ID
 1. Resolve digest index -> `arxiv_id`.
 2. Load the full paper, not just abstract metadata.
 3. Use full-paper content as the basis for detailed explanation and Q&A.
+4. Route to the minimal relevant companion skill(s) for the requested deep-dive outcome.
+
+Companion-skill routing:
+- `pdf`: full-paper extraction, section-by-section reading, table/figure checks, and claim verification.
+- `jupyter-notebook`: reproduction attempts, exploratory experiments, derivations, and executable walkthroughs.
+- `doc`: polished `.docx` reading notes, review memos, and formatted writeups.
+- `notion-knowledge-capture`: structured notes, decision logs, and linked Notion knowledge capture.
+
+Coordination policy:
+- keep `arxiv-digest` as the orchestrator for paper-selection context.
+- if multiple skills apply, invoke them in a minimal sequence and state the sequence briefly.
+- preserve traceability in downstream outputs by including paper title and arXiv ID.
 
 Recommended source order:
 1. arxiv PDF: `https://arxiv.org/pdf/{arxiv_id}.pdf`
