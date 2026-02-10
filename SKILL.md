@@ -18,7 +18,7 @@ Fetch, rank, and present arxiv papers using two persistent user files:
 ## Workflow
 
 1. Load or bootstrap profile/preferences.
-2. Fetch papers for requested period.
+2. Fetch papers for requested period via web search.
 3. Rank papers with preference + network signals.
 4. Present period-scaled digest in 3 tiers.
 5. Collect feedback and profile updates from interaction.
@@ -73,39 +73,43 @@ If no profile and no name available, ask for interest keywords and create a basi
 
 ## Step 2: Fetch Papers
 
-Primary command:
-```bash
-python3 scripts/arxiv_fetch.py --period today --output /tmp/papers.json -q
-```
+Default fetch mode (required):
+- use the platform's `web_search`/browse capability to collect papers.
+- do not use `scripts/arxiv_fetch.py` for normal digest generation.
+- collect from authoritative pages first: arXiv category `/list/{category}/new`, `/recent`, and paper `abs` pages.
 
-Performance note for `today`:
-- if `arxiv_preferences.json` is missing, do not run a failing `--prefs` fetch first; fetch once with explicit `--categories` (or available profile-derived categories).
-- prefer `--fast` for interactive "today" digests when low latency matters.
-- keep one storage root for all runs (`--storage-dir` or `ARXIV_DIGEST_HOME`) so prefs/profile/output files are not split across `.codex_tmp` and `~/.claude/arxiv-digest`.
+Period handling:
+- `today`: target papers announced on the current UTC arXiv cycle.
+- `week` / `7d`: last 7 days.
+- `month` / `30d`: last 30 days.
+- `Nd`: last `N` days.
+- `YYYY-MM-DD`, `YYYY-MM`, `YYYY-MM-DD:YYYY-MM-DD`: exact day/month/range.
+- `recent`: latest available postings if exact date filtering is unavailable.
 
-Safe-output default:
-- `arxiv_fetch.py` now preserves existing `--output` files when a fetch returns 0 papers.
-- to intentionally overwrite with an empty array, pass `--allow-empty-output`.
+Web-search query strategy:
+- run focused queries per category and time window instead of one broad query.
+- prefer queries that return arXiv-native pages:
+  - `site:arxiv.org/list/{category}/new`
+  - `site:arxiv.org/list/{category}/recent`
+  - `site:arxiv.org abs {topic keyword} {date window}`
+- for each candidate paper, resolve and verify:
+  - arXiv ID
+  - full title
+  - authors
+  - abstract snippet/source page
+  - posting/update date
+  - category
 
-Supported periods include:
-- `today`, `week`, `month`, `30d`, `Nd`
-- `YYYY-MM-DD`, `YYYY-MM`, `YYYY-MM-DD:YYYY-MM-DD`
-- `recent`
+Exclusion policy (required):
+- exclude cross-listed entries from digest candidates.
+- exclude replacement entries (`[replacement for ...]`) from digest candidates.
+- keep canonical new submissions only.
+- if the same arXiv ID appears multiple times across sources/categories, keep only one canonical record.
 
-For long windows, prefer smaller chunks for reliability:
-```bash
-python3 scripts/arxiv_fetch.py --period month --chunk-days 5 --output /tmp/papers.json -q
-```
-
-If speed is the priority (and occasional misses are acceptable), use fast mode:
-```bash
-python3 scripts/arxiv_fetch.py --period 10d --chunk-days 5 --fast --output /tmp/papers.json -q
-```
-
-Latency guardrail for `today` digests:
-- avoid repeated ad-hoc `python -c` probes over the same JSON files.
-- do one fetch pass, one ranking pass, and one digest-format pass.
-- if key input files are missing, fail fast with one clear message instead of retrying equivalent commands.
+Latency and quality guardrail:
+- do one search pass, one normalization pass, and one ranking pass.
+- deduplicate by arXiv ID before ranking.
+- if search returns sparse results, widen categories or move from `/new` to `/recent` before giving up.
 
 Unread-day tracking workflow:
 - mark read days after delivering a digest:
@@ -116,23 +120,23 @@ python3 scripts/storage_manager.py mark-read --date 2026-02-10
 ```bash
 python3 scripts/storage_manager.py unread-range
 ```
-- then fetch that period:
-```bash
-python3 scripts/arxiv_fetch.py --period YYYY-MM-DD:YYYY-MM-DD --output /tmp/papers.json -q
-```
+- then use that returned date range as the web-search fetch window.
 
 Collection targets by period:
 - `today` or single day: 30-80 papers
 - `week` (7 days): 80-180 papers
 - `month` (30 days): 180-400 papers
 
-If fetch script fails, use manual fallback by scraping `https://arxiv.org/list/{category}/new` or `/recent`.
+Legacy/local fallback (optional only):
+- keep `scripts/arxiv_fetch.py` available for environments where web search is not available.
+- only use script mode when explicitly requested by the user.
 
 Fetch integrity checks before ranking:
 - record fetch window (`date_from`, `date_to`) and categories used.
-- verify `n_total > 0` for multi-category windows unless the user explicitly requested an empty/sparse niche query.
-- if any category/chunk failed, report it and mark digest as partial.
-- if output already existed and fetch returned 0 papers, do not trust stale assumptions; inspect logs and rerun.
+- verify non-zero candidate pool for multi-category windows unless user explicitly requested a sparse niche query.
+- if any category/source query failed, report it and mark digest as partial.
+- verify each selected entry has a valid arXiv ID and source page before ranking output.
+- verify no selected entry is marked cross-list or replacement.
 
 ## Step 3: Score and Rank
 
@@ -220,7 +224,7 @@ Output style:
 - concise summaries unless user requests detail
 
 Digest provenance block (required):
-- report fetch period, fetch timestamp, categories, total fetched papers, and whether any chunks failed.
+- report fetch period, fetch timestamp, categories, total fetched papers, total excluded cross-lists, total excluded replacements, and whether any source queries failed.
 - if partial, label the digest as partial at the top.
 
 ## Step 5: Collect Feedback
@@ -306,7 +310,7 @@ Save updated preferences:
 - Weekend/holiday: if `/new` is empty, use `/pastweek` or `/recent`.
 - Too many papers: enforce period caps; do not dump unbounded lists.
 - Too few papers: broaden categories or use `recent`.
-- Network/API failures: report failure; do not fabricate listings.
+- Web-search/network failures: report failure; do not fabricate listings.
 - Missing interest data: ask user directly instead of guessing.
 
 ## References

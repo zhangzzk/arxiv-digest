@@ -6,6 +6,7 @@ It does three things well:
 - finds new papers for your time window (`today`, `week`, `month`, custom ranges)
 - ranks them using your interests and collaborator network
 - gets better over time from your feedback
+- keeps canonical new submissions only (excludes cross-listed and replacement entries)
 
 ## Quick start
 
@@ -38,10 +39,7 @@ Get "last unread days" window:
 python3 scripts/storage_manager.py unread-range
 ```
 
-Use returned period with fetch:
-```bash
-python3 scripts/arxiv_fetch.py --period YYYY-MM-DD:YYYY-MM-DD --output /tmp/papers.json -q
-```
+Use returned period as the `web_search` time window for digest collection.
 
 ## Where your data lives
 
@@ -56,5 +54,5 @@ You can override storage with `--storage-dir`, `ARXIV_DIGEST_HOME`, or `XDG_DATA
 ## Files
 
 - `SKILL.md`: workflow and behavior
-- `scripts/`: fetch/profile/storage utilities
+- `scripts/`: profile/storage utilities plus legacy fetch tooling (kept for optional future/local mode)
 - `references/`: scoring and schema details
