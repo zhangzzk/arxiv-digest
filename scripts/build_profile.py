@@ -28,11 +28,14 @@ import time
 import logging
 from datetime import datetime
 from collections import Counter, defaultdict
+from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode, quote
 from urllib.error import URLError, HTTPError
 from xml.etree import ElementTree as ET
 from typing import List, Dict, Optional, Set, Tuple
+
+from storage_paths import get_storage_paths, update_user_record
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -524,23 +527,31 @@ def main():
         "--update", "-u",
         help="Path to existing profile.json to refresh",
     )
-    parser.add_argument("--output", "-o", default="researcher_profile.json",
-                        help="Output file path")
+    parser.add_argument(
+        "--storage-dir",
+        help="Storage root override (default: ARXIV_DIGEST_HOME, XDG_DATA_HOME/arxiv-digest, or ~/.claude/arxiv-digest)",
+    )
+    parser.add_argument("--output", "-o",
+                        help="Output file path (default: storage/researcher_profile.json, or --update path in update mode)")
     parser.add_argument("--quiet", "-q", action="store_true")
 
     args = parser.parse_args()
+    paths = get_storage_paths(args.storage_dir)
 
     if args.quiet:
         logging.getLogger().setLevel(logging.ERROR)
 
     # Update mode
     if args.update:
+        output_path = Path(args.output).expanduser().resolve() if args.output else Path(args.update).expanduser().resolve()
         with open(args.update) as f:
             existing = json.load(f)
         profile = update_profile(existing)
-        with open(args.output, "w") as f:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
             json.dump(profile, f, indent=2, ensure_ascii=False)
-        log.info(f"Updated profile written to {args.output}")
+        update_user_record(paths, profile_path=output_path)
+        log.info(f"Updated profile written to {output_path}")
         return
 
     # Build mode
@@ -583,10 +594,13 @@ def main():
         expand_second_degree=args.expand_network,
     )
 
-    with open(args.output, "w") as f:
+    output_path = Path(args.output).expanduser().resolve() if args.output else paths.profile
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
         json.dump(profile, f, indent=2, ensure_ascii=False)
+    update_user_record(paths, profile_path=output_path)
 
-    log.info(f"Profile written to {args.output}")
+    log.info(f"Profile written to {output_path}")
     log.info(f"  Papers: {profile['publications']['total_count']}")
     log.info(f"  Co-authors: {len(profile['network']['coauthor_rank'])}")
     log.info(f"  Active co-authors: {len(profile['network']['active_coauthors'])}")

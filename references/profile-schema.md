@@ -147,7 +147,13 @@ Common names are a real problem. The script uses fuzzy matching (last name + fir
 
 ## Updating Cadence
 
-The profile doesn't need daily updates. Suggested schedule:
+Use a two-layer update strategy:
+
+1. **Continuous lightweight updates during interaction**
+- patch durable fields immediately when user provides new info
+- examples: affiliation, ORCID, homepage, preferred name, known paper IDs
+
+2. **Periodic/full rebuilds**
 - **Monthly** for active researchers
 - **On request** ("update my profile")
 - **After the user mentions a new paper** (add to known IDs and rebuild)

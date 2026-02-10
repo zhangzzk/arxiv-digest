@@ -1,19 +1,39 @@
 # Arxiv Digest
 
-Personalized daily Arxiv paper digests with adaptive preference learning.
+A personal arxiv reading assistant that learns what you care about.
 
-## Key Features
-- **Smart Ranking**: Ranks papers using publication history, co-author networks, and explicit interests.
-- **Adaptive Learning**: Refines your preference profile based on daily "like/dislike" feedback.
-- **Network Signals**: Highlights papers from your collaborators (👥) and novel "boundary expanders" (🔭).
-- **Portable**: Zero-dependency Python scripts for fetching and profile management.
+It does three things well:
+- finds new papers for your time window (`today`, `week`, `month`, custom ranges)
+- ranks them using your interests and collaborator network
+- gets better over time from your feedback
 
-## Components
-- `scripts/`: `arxiv_fetch.py` (Arxiv API/scraper) and `build_profile.py` (profile builder).
-- `references/`: Schemas for preferences, profiles, and scoring logic.
-- `SKILL.md`: Core agent instructions and workflow.
+## Quick start
 
-## Quick Start
-1. **Initialize**: Use `build_profile.py` to generate your `researcher_profile.json`.
-2. **Digest**: The skill fetches daily papers, ranks them, and presents ~10 curated picks.
-3. **Refine**: Provide feedback to update your `arxiv_preferences.json` for better future rankings.
+```bash
+python3 scripts/storage_manager.py init
+python3 scripts/build_profile.py --name "Your Name" --categories astro-ph.CO stat.ML
+python3 scripts/storage_manager.py status
+```
+
+## Daily flow
+
+1. Ask for a digest (for example: "what's new this week?").
+2. Review ranked papers with stable IDs like `#01`, `#02`.
+3. Give feedback on what was useful.
+4. Ask for a deep dive on any paper ID to load and discuss the full paper.
+
+## Where your data lives
+
+`~/.claude/arxiv-digest/`
+- `researcher_profile.json`
+- `arxiv_preferences.json`
+- `user_record.json`
+- `history/`
+
+You can override storage with `--storage-dir`, `ARXIV_DIGEST_HOME`, or `XDG_DATA_HOME`.
+
+## Files
+
+- `SKILL.md`: workflow and behavior
+- `scripts/`: fetch/profile/storage utilities
+- `references/`: scoring and schema details
