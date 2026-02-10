@@ -77,6 +77,15 @@ Primary command:
 python3 scripts/arxiv_fetch.py --period today --output /tmp/papers.json -q
 ```
 
+Performance note for `today`:
+- if `arxiv_preferences.json` is missing, do not run a failing `--prefs` fetch first; fetch once with explicit `--categories` (or available profile-derived categories).
+- prefer `--fast` for interactive "today" digests when low latency matters.
+- keep one storage root for all runs (`--storage-dir` or `ARXIV_DIGEST_HOME`) so prefs/profile/output files are not split across `.codex_tmp` and `~/.claude/arxiv-digest`.
+
+Safe-output default:
+- `arxiv_fetch.py` now preserves existing `--output` files when a fetch returns 0 papers.
+- to intentionally overwrite with an empty array, pass `--allow-empty-output`.
+
 Supported periods include:
 - `today`, `week`, `month`, `30d`, `Nd`
 - `YYYY-MM-DD`, `YYYY-MM`, `YYYY-MM-DD:YYYY-MM-DD`
@@ -87,12 +96,28 @@ For long windows, prefer smaller chunks for reliability:
 python3 scripts/arxiv_fetch.py --period month --chunk-days 5 --output /tmp/papers.json -q
 ```
 
+If speed is the priority (and occasional misses are acceptable), use fast mode:
+```bash
+python3 scripts/arxiv_fetch.py --period 10d --chunk-days 5 --fast --output /tmp/papers.json -q
+```
+
+Latency guardrail for `today` digests:
+- avoid repeated ad-hoc `python -c` probes over the same JSON files.
+- do one fetch pass, one ranking pass, and one digest-format pass.
+- if key input files are missing, fail fast with one clear message instead of retrying equivalent commands.
+
 Collection targets by period:
 - `today` or single day: 30-80 papers
 - `week` (7 days): 80-180 papers
 - `month` (30 days): 180-400 papers
 
 If fetch script fails, use manual fallback by scraping `https://arxiv.org/list/{category}/new` or `/recent`.
+
+Fetch integrity checks before ranking:
+- record fetch window (`date_from`, `date_to`) and categories used.
+- verify `n_total > 0` for multi-category windows unless the user explicitly requested an empty/sparse niche query.
+- if any category/chunk failed, report it and mark digest as partial.
+- if output already existed and fetch returned 0 papers, do not trust stale assumptions; inspect logs and rerun.
 
 ## Step 3: Score and Rank
 
@@ -113,6 +138,11 @@ Co-author policy:
 - always surface active co-author papers
 - annotate them clearly
 
+Deterministic ranking output:
+- build a single ranked list with explicit `score` and `reasons` fields.
+- persist ranked data to JSON before writing the human digest.
+- never hand-pick Top Picks directly from an unsorted pool.
+
 ## Step 4: Present Digest
 
 Use 3 sections in this order:
@@ -124,15 +154,27 @@ Use 3 sections in this order:
 
 | Period window | Top Picks | Solid Matches | Boundary Expanders | Total shown |
 |---|---:|---:|---:|---:|
-| `today` / 1 day | 1-5 | 4-8 | 2-3 | 7-16 |
-| `week` / ~7 days | 5-10 | 5-10 | 3-6 | 13-26 |
-| `month` / ~30 days | 18-30 | 8-15 | 5-10 | 31-55 |
+| `today` / 1 day | 3-8 | 6-12 | 3-5 | 12-25 |
+| `week` / ~7 days | 8-14 | 10-16 | 5-8 | 23-38 |
+| `month` / ~30 days | 24-36 | 14-24 | 8-12 | 46-72 |
 | custom N days | interpolate | interpolate | interpolate | capped |
 
 7-day default:
-- 5-10 top picks
-- 5-10 solid matches
-- 3-6 boundary expanders
+- 10-12 top picks
+- 12-14 solid matches
+- 6-8 boundary expanders
+
+Selection policy (required):
+- `Top Picks` = first `N_top` items from the ranked list.
+- `Solid Matches` = next `N_solid` items from the ranked list.
+- `Boundary Expanders` = next `N_boundary` items that have lower direct relevance but clear adjacent value.
+- only reorder within a tier for readability if relevance order is preserved.
+- if a top-ranked paper is excluded, include an explicit exclusion reason (`duplicate topic`, `superseded`, `outside user scope`, etc.).
+
+Preflight omission check (required):
+- compute `top_guard = max(N_top + N_solid, 12)` for daily/weekly windows and scale up for longer windows.
+- verify every paper in ranked positions `1..top_guard` appears in `Top Picks` or `Solid Matches`, or has an explicit exclusion reason.
+- if this check fails, regenerate the digest instead of replying.
 
 Per paper include:
 - unique reference index (global within digest): `#01`, `#02`, ...
@@ -142,11 +184,29 @@ Per paper include:
 - why-it-matches tag
 - for boundary papers: `Extends toward: ...`
 
+Title rendering rule (required):
+- always print the full original paper title from metadata; do not truncate, abbreviate, or replace with shorthand.
+- preserve title punctuation/capitalization as given by source metadata.
+- if line length is long, wrap onto the next line instead of shortening the title.
+
+Summary construction rule (required):
+- use only information supported by the paper's original abstract metadata (plus explicit ranking signals).
+- write exactly 2-4 sentences; do not output one-line blurbs.
+- sentence 1: core problem + method/task from the abstract.
+- sentence 2: key result, contribution, or dataset/scope from the abstract.
+- sentence 3 (optional): caveat, limitation, or context from abstract wording.
+- final sentence: explicit `Why it matches` linkage to ranking reasons (topic/method/author/network), not generic praise.
+- avoid vague fillers like "interesting work" or "relevant paper" without concrete abstract-grounded details.
+
 Output style:
 - numbered list
 - prepend each entry with its unique index (e.g., `#07`)
 - most relevant first within each section
 - concise summaries unless user requests detail
+
+Digest provenance block (required):
+- report fetch period, fetch timestamp, categories, total fetched papers, and whether any chunks failed.
+- if partial, label the digest as partial at the top.
 
 ## Step 5: Collect Feedback
 

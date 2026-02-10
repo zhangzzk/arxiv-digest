@@ -25,7 +25,10 @@ import sys
 import re
 import time
 import logging
+import os
+import tempfile
 import socket
+from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.request import urlopen, Request
 from urllib.parse import quote_plus, urlencode, urlparse, urlunparse
@@ -48,12 +51,50 @@ ARXIV_HTML_BASE = "https://arxiv.org/list"
 API_DELAY = 3.1  # seconds between API requests (arxiv asks for 3s)
 MAX_RESULTS_PER_QUERY = 200  # API max per page
 DEFAULT_CHUNK_DAYS = 7  # break long date ranges into smaller API windows
+MAX_RESULTS_UPPER_BOUND = 1000  # practical upper bound to reduce pagination
+DEFAULT_REQUEST_TIMEOUT = 30
+DEFAULT_REQUEST_RETRIES = 2
+DEFAULT_ATOM_RETRIES = 3
 USER_AGENT = "arxiv-digest-skill/1.0 (https://github.com/anthropics/claude)"
 
 # Atom / RSS namespaces
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 OPENSEARCH_NS = "{http://a9.com/-/spec/opensearch/1.1/}"
+
+
+def _resolve_prefs_path(prefs_path: Optional[str], default_prefs: Path) -> Optional[str]:
+    """
+    Resolve preferences file robustly across common storage locations.
+    If an explicit prefs path is missing, fallback to known roots.
+    """
+    if not prefs_path:
+        return str(default_prefs) if default_prefs.exists() else None
+
+    explicit = Path(prefs_path).expanduser()
+    if explicit.exists():
+        return str(explicit)
+
+    candidates = [
+        default_prefs,
+        Path.cwd() / "arxiv_preferences.json",
+        Path.cwd() / ".codex_tmp" / "arxiv_preferences.json",
+        Path.home() / ".claude" / "arxiv-digest" / "arxiv_preferences.json",
+    ]
+    seen = set()
+    for cand in candidates:
+        resolved = cand.expanduser()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.exists():
+            log.warning(
+                f"--prefs path not found ({prefs_path}); using discovered prefs file at {resolved}"
+            )
+            return str(resolved)
+
+    return str(explicit)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +214,11 @@ def fetch_api_daterange(
     date_to: str,
     chunk_days: int = DEFAULT_CHUNK_DAYS,
     api_base: str = ARXIV_API_BASE,
+    api_delay: float = API_DELAY,
+    max_results_per_query: int = MAX_RESULTS_PER_QUERY,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    request_retries: int = DEFAULT_REQUEST_RETRIES,
+    atom_retries: int = DEFAULT_ATOM_RETRIES,
 ) -> List[Dict]:
     """
     Query the arxiv API for papers submitted in [date_from, date_to].
@@ -193,7 +239,15 @@ def fetch_api_daterange(
             )
             try:
                 chunk_papers = _fetch_api_daterange_chunk(
-                    cat, chunk_from, chunk_to, api_base=api_base
+                    cat,
+                    chunk_from,
+                    chunk_to,
+                    api_base=api_base,
+                    max_results_per_query=max_results_per_query,
+                    api_delay=api_delay,
+                    request_timeout=request_timeout,
+                    request_retries=request_retries,
+                    atom_retries=atom_retries,
                 )
                 category_papers.extend(chunk_papers)
             except Exception as e:
@@ -204,14 +258,14 @@ def fetch_api_daterange(
                 )
 
             if i < len(total_chunks):
-                time.sleep(API_DELAY)
+                time.sleep(max(0.0, api_delay))
 
         log.info(f"  [{cat}] collected {len(category_papers)} entries across chunks")
         papers.extend(category_papers)
 
         # Delay between categories
         if cat != categories[-1]:
-            time.sleep(API_DELAY)
+            time.sleep(max(0.0, api_delay))
 
     return papers
 
@@ -239,23 +293,34 @@ def _fetch_api_daterange_chunk(
     date_from: str,
     date_to: str,
     api_base: str = ARXIV_API_BASE,
+    max_results_per_query: int = MAX_RESULTS_PER_QUERY,
+    api_delay: float = API_DELAY,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    request_retries: int = DEFAULT_REQUEST_RETRIES,
+    atom_retries: int = DEFAULT_ATOM_RETRIES,
 ) -> List[Dict]:
     papers = []
     query = f"cat:{cat}+AND+submittedDate:[{date_from}0000+TO+{date_to}2359]"
     start = 0
     total = None
+    page_size = min(max(1, max_results_per_query), MAX_RESULTS_UPPER_BOUND)
 
     while total is None or start < total:
         params = urlencode({
             "search_query": query,
             "start": start,
-            "max_results": MAX_RESULTS_PER_QUERY,
+            "max_results": page_size,
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }, safe="+:[]")
         url = f"{api_base}?{params}"
 
-        root = _fetch_atom_root(url)
+        root = _fetch_atom_root(
+            url,
+            retries=atom_retries,
+            timeout=request_timeout,
+            request_retries=request_retries,
+        )
 
         if total is None:
             total_el = root.find(f"{OPENSEARCH_NS}totalResults")
@@ -275,17 +340,22 @@ def _fetch_api_daterange_chunk(
 
         start += len(entries)
         if start < total:
-            time.sleep(API_DELAY)
+            time.sleep(max(0.0, api_delay))
 
     return papers
 
 
-def _fetch_atom_root(url: str, retries: int = 3, timeout: int = 30) -> ET.Element:
+def _fetch_atom_root(
+    url: str,
+    retries: int = DEFAULT_ATOM_RETRIES,
+    timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    request_retries: int = DEFAULT_REQUEST_RETRIES,
+) -> ET.Element:
     """Fetch and parse Atom XML with retries (helps against transient truncation/errors)."""
     last_error = None
     for attempt in range(retries + 1):
         try:
-            xml_text = fetch_url(url, retries=1, timeout=timeout)
+            xml_text = fetch_url(url, retries=request_retries, timeout=timeout)
             return ET.fromstring(xml_text)
         except Exception as e:
             last_error = e
@@ -382,6 +452,32 @@ def fetch_rss_today(categories: List[str], rss_base: str = ARXIV_RSS_BASE) -> Li
     except Exception as e:
         log.warning(f"RSS feed failed: {e}")
 
+    return papers
+
+
+def fetch_rss_today_tuned(
+    categories: List[str],
+    rss_base: str = ARXIV_RSS_BASE,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    request_retries: int = DEFAULT_REQUEST_RETRIES,
+) -> List[Dict]:
+    """
+    Tunable wrapper for RSS fetch. Kept separate to preserve compatibility.
+    """
+    papers = []
+    cat_str = "+".join(categories)
+    url = f"{rss_base}/{cat_str}"
+    log.info(f"RSS feed: {url}")
+    try:
+        xml_text = fetch_url(url, retries=request_retries, timeout=request_timeout)
+        root = ET.fromstring(xml_text)
+        for entry in root.findall(f"{ATOM_NS}entry"):
+            paper = _parse_rss_entry(entry)
+            if paper:
+                papers.append(paper)
+        log.info(f"  RSS returned {len(papers)} entries")
+    except Exception as e:
+        log.warning(f"RSS feed failed: {e}")
     return papers
 
 
@@ -535,6 +631,9 @@ def fetch_html_listing(
     categories: List[str],
     page: str = "new",
     html_base: str = ARXIV_HTML_BASE,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    request_retries: int = DEFAULT_REQUEST_RETRIES,
+    html_category_delay: float = 1.0,
 ) -> List[Dict]:
     """
     Scrape arxiv /list/{cat}/{page} HTML pages.
@@ -547,16 +646,18 @@ def fetch_html_listing(
         log.info(f"HTML scrape: {url}")
 
         try:
-            html_text = fetch_url(url)
+            html_text = fetch_url(url, retries=request_retries, timeout=request_timeout)
             parser = ArxivListParser()
             parser.feed(html_text)
             log.info(f"  Parsed {len(parser.papers)} papers from HTML for {cat}")
             papers.extend(parser.papers)
         except Exception as e:
+            if _is_dns_error(e):
+                raise ConnectionError(f"HTML DNS failure while fetching {cat}: {e}") from e
             log.warning(f"HTML scrape failed for {cat}: {e}")
 
         if cat != categories[-1]:
-            time.sleep(1)  # be polite
+            time.sleep(max(0.0, html_category_delay))  # be polite
 
     return papers
 
@@ -672,6 +773,12 @@ def fetch_papers(
     api_base: str = ARXIV_API_BASE,
     rss_base: str = ARXIV_RSS_BASE,
     html_base: str = ARXIV_HTML_BASE,
+    api_delay: float = API_DELAY,
+    max_results_per_query: int = MAX_RESULTS_PER_QUERY,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    request_retries: int = DEFAULT_REQUEST_RETRIES,
+    atom_retries: int = DEFAULT_ATOM_RETRIES,
+    html_category_delay: float = 1.0,
 ) -> List[Dict]:
     """
     Fetch papers for the given categories and period.
@@ -684,7 +791,12 @@ def fetch_papers(
         # Try RSS feed first (best for today's papers)
         log.info("=== Trying RSS feed for today's papers ===")
         try:
-            papers = fetch_rss_today(categories, rss_base=rss_base)
+            papers = fetch_rss_today_tuned(
+                categories,
+                rss_base=rss_base,
+                request_timeout=request_timeout,
+                request_retries=request_retries,
+            )
         except Exception as e:
             log.warning(f"RSS failed: {e}")
 
@@ -692,7 +804,14 @@ def fetch_papers(
         if not papers:
             log.info("=== RSS empty/failed, falling back to HTML scraping ===")
             try:
-                papers = fetch_html_listing(categories, "new", html_base=html_base)
+                papers = fetch_html_listing(
+                    categories,
+                    "new",
+                    html_base=html_base,
+                    request_timeout=request_timeout,
+                    request_retries=request_retries,
+                    html_category_delay=html_category_delay,
+                )
             except Exception as e:
                 log.warning(f"HTML scrape also failed: {e}")
 
@@ -701,7 +820,16 @@ def fetch_papers(
         log.info(f"=== Using API for date range {date_from} to {date_to} ===")
         try:
             papers = fetch_api_daterange(
-                categories, date_from, date_to, chunk_days=chunk_days, api_base=api_base
+                categories,
+                date_from,
+                date_to,
+                chunk_days=chunk_days,
+                api_base=api_base,
+                api_delay=api_delay,
+                max_results_per_query=max_results_per_query,
+                request_timeout=request_timeout,
+                request_retries=request_retries,
+                atom_retries=atom_retries,
             )
         except Exception as e:
             log.warning(f"API failed: {e}")
@@ -710,14 +838,28 @@ def fetch_papers(
         if not papers:
             log.info("=== API empty/failed, falling back to HTML ===")
             try:
-                papers = fetch_html_listing(categories, "recent", html_base=html_base)
+                papers = fetch_html_listing(
+                    categories,
+                    "recent",
+                    html_base=html_base,
+                    request_timeout=request_timeout,
+                    request_retries=request_retries,
+                    html_category_delay=html_category_delay,
+                )
             except Exception as e:
                 log.warning(f"HTML fallback also failed: {e}")
 
     elif mode == "html_page":
         # Direct HTML page fetch
         log.info(f"=== Fetching HTML page: {date_from} ===")
-        papers = fetch_html_listing(categories, date_from, html_base=html_base)
+        papers = fetch_html_listing(
+            categories,
+            date_from,
+            html_base=html_base,
+            request_timeout=request_timeout,
+            request_retries=request_retries,
+            html_category_delay=html_category_delay,
+        )
 
     # Post-process
     papers = deduplicate(papers)
@@ -760,6 +902,47 @@ def main():
         help="Date-range API chunk size in days (smaller is more reliable for long periods; default: 7)",
     )
     parser.add_argument(
+        "--api-delay",
+        type=float,
+        default=API_DELAY,
+        help=f"Delay between paginated API requests in seconds (default: {API_DELAY})",
+    )
+    parser.add_argument(
+        "--max-results-per-query",
+        type=int,
+        default=MAX_RESULTS_PER_QUERY,
+        help=f"Arxiv API page size per request (default: {MAX_RESULTS_PER_QUERY}, max used: {MAX_RESULTS_UPPER_BOUND})",
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=int,
+        default=DEFAULT_REQUEST_TIMEOUT,
+        help=f"HTTP timeout in seconds per request (default: {DEFAULT_REQUEST_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--request-retries",
+        type=int,
+        default=DEFAULT_REQUEST_RETRIES,
+        help=f"Retries inside each HTTP request attempt (default: {DEFAULT_REQUEST_RETRIES})",
+    )
+    parser.add_argument(
+        "--atom-retries",
+        type=int,
+        default=DEFAULT_ATOM_RETRIES,
+        help=f"Top-level Atom fetch/parse retries per page (default: {DEFAULT_ATOM_RETRIES})",
+    )
+    parser.add_argument(
+        "--html-category-delay",
+        type=float,
+        default=1.0,
+        help="Delay between categories for HTML fallback in seconds (default: 1.0)",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use a faster profile: lower delays/retries and larger API page size.",
+    )
+    parser.add_argument(
         "--api-base",
         default=ARXIV_API_BASE,
         help=f"Arxiv API base URL (default: {ARXIV_API_BASE})",
@@ -777,6 +960,11 @@ def main():
     parser.add_argument(
         "--output", "-o",
         help="Output file path (default: stdout)",
+    )
+    parser.add_argument(
+        "--allow-empty-output",
+        action="store_true",
+        help="Allow writing an empty result set to --output (default: keep existing file unchanged when empty)",
     )
     parser.add_argument(
         "--include-replacements",
@@ -797,9 +985,7 @@ def main():
 
     # Resolve categories
     categories = args.categories
-    prefs_path = args.prefs
-    if not prefs_path and paths.prefs.exists():
-        prefs_path = str(paths.prefs)
+    prefs_path = _resolve_prefs_path(args.prefs, paths.prefs)
 
     if not categories and prefs_path:
         try:
@@ -808,12 +994,49 @@ def main():
             categories = prefs.get("arxiv_categories", [])
             log.info(f"Loaded categories from prefs: {categories} ({prefs_path})")
         except Exception as e:
-            log.error(f"Failed to read preferences: {e}")
+            log.error(f"Failed to read preferences at {prefs_path}: {e}")
             sys.exit(1)
 
     if not categories:
-        log.error("No categories specified. Use --categories, --prefs, or create default prefs in storage.")
+        log.error(
+            "No categories specified. Use --categories, --prefs, or ensure arxiv_preferences.json "
+            f"exists under storage root ({paths.root}) or .codex_tmp."
+        )
         sys.exit(1)
+
+    api_delay = max(0.0, args.api_delay)
+    max_results_per_query = min(max(1, args.max_results_per_query), MAX_RESULTS_UPPER_BOUND)
+    request_timeout = max(5, args.request_timeout)
+    request_retries = max(0, args.request_retries)
+    atom_retries = max(0, args.atom_retries)
+    html_category_delay = max(0.0, args.html_category_delay)
+
+    mode, _, _ = parse_period(args.period)
+    if mode == "today":
+        # "today" should feel responsive by default.
+        request_timeout = min(request_timeout, 12)
+        request_retries = min(request_retries, 1)
+        atom_retries = min(atom_retries, 1)
+        html_category_delay = min(html_category_delay, 0.2)
+
+    if args.fast:
+        # Fast profile prioritizes throughput over robustness.
+        api_delay = min(api_delay, 1.0)
+        max_results_per_query = max(max_results_per_query, MAX_RESULTS_UPPER_BOUND)
+        request_timeout = min(request_timeout, 15)
+        request_retries = min(request_retries, 0)
+        atom_retries = min(atom_retries, 0)
+        html_category_delay = min(html_category_delay, 0.0)
+
+    log.info(
+        "Fetch tuning: "
+        f"api_delay={api_delay}s, "
+        f"max_results_per_query={max_results_per_query}, "
+        f"request_timeout={request_timeout}s, "
+        f"request_retries={request_retries}, "
+        f"atom_retries={atom_retries}, "
+        f"html_category_delay={html_category_delay}s"
+    )
 
     # Fetch
     papers = fetch_papers(
@@ -824,15 +1047,39 @@ def main():
         api_base=args.api_base,
         rss_base=args.rss_base,
         html_base=args.html_base,
+        api_delay=api_delay,
+        max_results_per_query=max_results_per_query,
+        request_timeout=request_timeout,
+        request_retries=request_retries,
+        atom_retries=atom_retries,
+        html_category_delay=html_category_delay,
     )
 
     # Output
     output_json = json.dumps(papers, indent=2, ensure_ascii=False)
 
     if args.output:
-        with open(args.output, "w") as f:
-            f.write(output_json)
-        log.info(f"Wrote {len(papers)} papers to {args.output}")
+        output_exists = os.path.exists(args.output)
+        if len(papers) == 0 and output_exists and not args.allow_empty_output:
+            log.warning(
+                f"Fetch returned 0 papers; preserving existing output at {args.output}. "
+                "Use --allow-empty-output to overwrite intentionally."
+            )
+        else:
+            out_dir = os.path.dirname(os.path.abspath(args.output)) or "."
+            os.makedirs(out_dir, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(prefix=".arxiv_fetch_", suffix=".json.tmp", dir=out_dir)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(output_json)
+                os.replace(tmp_path, args.output)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+            log.info(f"Wrote {len(papers)} papers to {args.output}")
     else:
         print(output_json)
 
